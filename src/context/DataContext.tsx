@@ -19,11 +19,16 @@ import {
   updatePlayerRow,
 } from "@/lib/supabase/players";
 import {
+  deleteClubRow,
+  fetchClubs,
+  insertClub,
+  updateClubRow,
+} from "@/lib/supabase/clubs";
+import {
   MOCK_ACTIVITY,
   MOCK_AI_CONVERSATIONS,
   MOCK_ALERTS,
   MOCK_AUDIT_LOG,
-  MOCK_CLUBS,
   MOCK_COMMUNICATIONS,
   MOCK_CONTACTS,
   MOCK_DEALS,
@@ -56,6 +61,7 @@ interface DataContextValue {
   players: Player[];
   playersLoading: boolean;
   clubs: Club[];
+  clubsLoading: boolean;
   contacts: Contact[];
   tasks: TaskItem[];
   deals: Deal[];
@@ -68,7 +74,7 @@ interface DataContextValue {
   deletePlayer: (id: string) => void;
   getPlayer: (id: string) => Player | undefined;
 
-  addClub: (club: Omit<Club, "id" | "createdAt" | "updatedAt">) => Club;
+  addClub: (club: Omit<Club, "id" | "createdAt" | "updatedAt">) => Promise<Club>;
   updateClub: (id: string, updates: Partial<Club>) => void;
   deleteClub: (id: string) => void;
   getClub: (id: string) => Club | undefined;
@@ -143,10 +149,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
       .finally(() => setPlayersLoading(false));
   }, []);
 
-  const { items: clubs, setItems: setClubs } = useLocalCollection<Club>(
-    "clubs",
-    MOCK_CLUBS
-  );
+  // Kluby už také nejsou v localStorage, ale v Supabase — viz src/lib/supabase/clubs.ts.
+  const [clubs, setClubs] = useState<Club[]>([]);
+  const [clubsLoading, setClubsLoading] = useState(true);
+
+  useEffect(() => {
+    fetchClubs()
+      .then(setClubs)
+      .catch((err) => console.error("Nepodařilo se načíst kluby ze Supabase:", err))
+      .finally(() => setClubsLoading(false));
+  }, []);
+
   const { items: contacts, setItems: setContacts } = useLocalCollection<Contact>(
     "contacts",
     MOCK_CONTACTS
@@ -259,13 +272,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   // --- Clubs -------------------------------------------------------------
 
   const addClub = useCallback<DataContextValue["addClub"]>(
-    (club) => {
-      const created: Club = {
-        ...club,
-        id: generateId("club"),
-        createdAt: nowIso(),
-        updatedAt: nowIso(),
-      };
+    async (club) => {
+      const created = await insertClub(club);
       setClubs((prev) => [created, ...prev]);
       logActivity({
         type: "club_added",
@@ -276,7 +284,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       });
       return created;
     },
-    [setClubs, logActivity]
+    [logActivity]
   );
 
   const updateClub = useCallback<DataContextValue["updateClub"]>(
@@ -286,15 +294,21 @@ export function DataProvider({ children }: { children: ReactNode }) {
           c.id === id ? { ...c, ...updates, updatedAt: nowIso() } : c
         )
       );
+      updateClubRow(id, updates).catch((err) =>
+        console.error("Nepodařilo se uložit změnu klubu do Supabase:", err)
+      );
     },
-    [setClubs]
+    []
   );
 
   const deleteClub = useCallback<DataContextValue["deleteClub"]>(
     (id) => {
       setClubs((prev) => prev.filter((c) => c.id !== id));
+      deleteClubRow(id).catch((err) =>
+        console.error("Nepodařilo se smazat klub v Supabase:", err)
+      );
     },
-    [setClubs]
+    []
   );
 
   const getClub = useCallback(
@@ -762,6 +776,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
               : c
           )
         );
+        updateClubRow(id, { syncStatus: "synced", dataSource: "eliteprospects", lastSyncedAt: timestamp }).catch(
+          (err) => console.error("Nepodařilo se uložit sync klubu do Supabase:", err)
+        );
         setSyncLog((prev) => [
           { id: generateId("sync"), entityType: "club", entityId: id, entityLabel: club.name, status: "synced", message: "Club staff data refreshed (mock).", timestamp },
           ...prev,
@@ -790,6 +807,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       players,
       playersLoading,
       clubs,
+      clubsLoading,
       contacts,
       tasks,
       deals,
@@ -850,6 +868,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       players,
       playersLoading,
       clubs,
+      clubsLoading,
       contacts,
       tasks,
       deals,
