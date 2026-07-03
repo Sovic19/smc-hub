@@ -31,6 +31,12 @@ import {
   updateContactRow,
 } from "@/lib/supabase/contacts";
 import {
+  deleteTaskRow,
+  fetchTasks,
+  insertTask,
+  updateTaskRow,
+} from "@/lib/supabase/tasks";
+import {
   MOCK_ACTIVITY,
   MOCK_AI_CONVERSATIONS,
   MOCK_ALERTS,
@@ -41,7 +47,6 @@ import {
   MOCK_GAMES,
   MOCK_OPPORTUNITIES,
   MOCK_SYNC_LOG,
-  MOCK_TASKS,
 } from "@/lib/mockData";
 import {
   ActivityEntry,
@@ -70,6 +75,7 @@ interface DataContextValue {
   contacts: Contact[];
   contactsLoading: boolean;
   tasks: TaskItem[];
+  tasksLoading: boolean;
   deals: Deal[];
   documents: AgencyDocument[];
   communications: CommunicationEntry[];
@@ -90,7 +96,7 @@ interface DataContextValue {
   deleteContact: (id: string) => void;
   getContact: (id: string) => Contact | undefined;
 
-  addTask: (task: Omit<TaskItem, "id" | "createdAt" | "updatedAt">) => TaskItem;
+  addTask: (task: Omit<TaskItem, "id" | "createdAt" | "updatedAt">) => Promise<TaskItem>;
   updateTask: (id: string, updates: Partial<TaskItem>) => void;
   deleteTask: (id: string) => void;
   getTask: (id: string) => TaskItem | undefined;
@@ -177,10 +183,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
       .finally(() => setContactsLoading(false));
   }, []);
 
-  const { items: tasks, setItems: setTasks } = useLocalCollection<TaskItem>(
-    "tasks",
-    MOCK_TASKS
-  );
+  // Úkoly už také nejsou v localStorage, ale v Supabase — viz src/lib/supabase/tasks.ts.
+  const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(true);
+
+  useEffect(() => {
+    fetchTasks()
+      .then(setTasks)
+      .catch((err) => console.error("Nepodařilo se načíst úkoly ze Supabase:", err))
+      .finally(() => setTasksLoading(false));
+  }, []);
+
   const { items: deals, setItems: setDeals } = useLocalCollection<Deal>(
     "deals",
     MOCK_DEALS
@@ -379,17 +392,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
   // --- Tasks -----------------------------------------------------------
 
   const addTask = useCallback<DataContextValue["addTask"]>(
-    (task) => {
-      const created: TaskItem = {
-        ...task,
-        id: generateId("task"),
-        createdAt: nowIso(),
-        updatedAt: nowIso(),
-      };
+    async (task) => {
+      const created = await insertTask(task);
       setTasks((prev) => [created, ...prev]);
       return created;
     },
-    [setTasks]
+    []
   );
 
   const updateTask = useCallback<DataContextValue["updateTask"]>(
@@ -410,15 +418,21 @@ export function DataProvider({ children }: { children: ReactNode }) {
           return updated;
         })
       );
+      updateTaskRow(id, updates).catch((err) =>
+        console.error("Nepodařilo se uložit změnu úkolu do Supabase:", err)
+      );
     },
-    [setTasks, logActivity]
+    [logActivity]
   );
 
   const deleteTask = useCallback<DataContextValue["deleteTask"]>(
     (id) => {
       setTasks((prev) => prev.filter((t) => t.id !== id));
+      deleteTaskRow(id).catch((err) =>
+        console.error("Nepodařilo se smazat úkol v Supabase:", err)
+      );
     },
-    [setTasks]
+    []
   );
 
   const getTask = useCallback(
@@ -828,6 +842,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       contacts,
       contactsLoading,
       tasks,
+      tasksLoading,
       deals,
       documents,
       communications,
@@ -890,6 +905,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       contacts,
       contactsLoading,
       tasks,
+      tasksLoading,
       deals,
       documents,
       communications,
