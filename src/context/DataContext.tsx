@@ -5,11 +5,19 @@ import {
   ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useState,
 } from "react";
 import { useLocalCollection } from "@/hooks/useLocalCollection";
 import { generateId, nowIso } from "@/lib/storage";
 import { generateMockExternalData } from "@/lib/mockImport";
+import {
+  deletePlayerRow,
+  fetchPlayers,
+  insertPlayer,
+  updatePlayerRow,
+} from "@/lib/supabase/players";
 import {
   MOCK_ACTIVITY,
   MOCK_AI_CONVERSATIONS,
@@ -22,7 +30,6 @@ import {
   MOCK_DOCUMENTS,
   MOCK_GAMES,
   MOCK_OPPORTUNITIES,
-  MOCK_PLAYERS,
   MOCK_SYNC_LOG,
   MOCK_TASKS,
 } from "@/lib/mockData";
@@ -47,6 +54,7 @@ import {
 
 interface DataContextValue {
   players: Player[];
+  playersLoading: boolean;
   clubs: Club[];
   contacts: Contact[];
   tasks: TaskItem[];
@@ -55,7 +63,7 @@ interface DataContextValue {
   communications: CommunicationEntry[];
   activity: ActivityEntry[];
 
-  addPlayer: (player: Omit<Player, "id" | "createdAt" | "updatedAt">) => Player;
+  addPlayer: (player: Omit<Player, "id" | "createdAt" | "updatedAt">) => Promise<Player>;
   updatePlayer: (id: string, updates: Partial<Player>) => void;
   deletePlayer: (id: string) => void;
   getPlayer: (id: string) => Player | undefined;
@@ -124,10 +132,17 @@ interface DataContextValue {
 const DataContext = createContext<DataContextValue | null>(null);
 
 export function DataProvider({ children }: { children: ReactNode }) {
-  const { items: players, setItems: setPlayers } = useLocalCollection<Player>(
-    "players",
-    MOCK_PLAYERS
-  );
+  // Hráči už nejsou v localStorage, ale v Supabase (Postgres) — viz src/lib/supabase/players.ts.
+  const [players, setPlayers] = useState<Player[]>([]);
+  const [playersLoading, setPlayersLoading] = useState(true);
+
+  useEffect(() => {
+    fetchPlayers()
+      .then(setPlayers)
+      .catch((err) => console.error("Nepodařilo se načíst hráče ze Supabase:", err))
+      .finally(() => setPlayersLoading(false));
+  }, []);
+
   const { items: clubs, setItems: setClubs } = useLocalCollection<Club>(
     "clubs",
     MOCK_CLUBS
@@ -196,13 +211,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   // --- Players ---------------------------------------------------------
 
   const addPlayer = useCallback<DataContextValue["addPlayer"]>(
-    (player) => {
-      const created: Player = {
-        ...player,
-        id: generateId("player"),
-        createdAt: nowIso(),
-        updatedAt: nowIso(),
-      };
+    async (player) => {
+      const created = await insertPlayer(player);
       setPlayers((prev) => [created, ...prev]);
       logActivity({
         type: "player_added" as ActivityType,
@@ -213,25 +223,32 @@ export function DataProvider({ children }: { children: ReactNode }) {
       });
       return created;
     },
-    [setPlayers, logActivity]
+    [logActivity]
   );
 
   const updatePlayer = useCallback<DataContextValue["updatePlayer"]>(
     (id, updates) => {
+      // Optimistické promítnutí do UI hned, zápis do Supabase běží na pozadí.
       setPlayers((prev) =>
         prev.map((p) =>
           p.id === id ? { ...p, ...updates, updatedAt: nowIso() } : p
         )
       );
+      updatePlayerRow(id, updates).catch((err) =>
+        console.error("Nepodařilo se uložit změnu hráče do Supabase:", err)
+      );
     },
-    [setPlayers]
+    []
   );
 
   const deletePlayer = useCallback<DataContextValue["deletePlayer"]>(
     (id) => {
       setPlayers((prev) => prev.filter((p) => p.id !== id));
+      deletePlayerRow(id).catch((err) =>
+        console.error("Nepodařilo se smazat hráče v Supabase:", err)
+      );
     },
-    [setPlayers]
+    []
   );
 
   const getPlayer = useCallback(
@@ -699,6 +716,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
       };
 
       setPlayers((prev) => prev.map((p) => (p.id === id ? updated : p)));
+      updatePlayerRow(id, {
+        externalData,
+        syncStatus: "synced",
+        dataSource: "eliteprospects",
+        lastSyncedAt: timestamp,
+      }).catch((err) => console.error("Nepodařilo se uložit import do Supabase:", err));
 
       setSyncLog((prev) => [
         {
@@ -765,6 +788,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const value = useMemo<DataContextValue>(
     () => ({
       players,
+      playersLoading,
       clubs,
       contacts,
       tasks,
@@ -824,6 +848,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 }),
     [
       players,
+      playersLoading,
       clubs,
       contacts,
       tasks,

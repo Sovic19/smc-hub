@@ -5,14 +5,24 @@ import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
 import { PlayerForm, PlayerFormValues } from "@/components/players/PlayerForm";
 import { useData } from "@/context/DataContext";
+import { useToast } from "@/context/ToastContext";
 
 export default function NewPlayerPage() {
   const router = useRouter();
   const { addPlayer } = useData();
+  const { showToast } = useToast();
 
-  function handleSubmit(values: PlayerFormValues) {
-    const created = addPlayer({ ...values, history: [] });
-    router.push(`/players/${created.id}`);
+  async function handleSubmit(values: PlayerFormValues) {
+    try {
+      const created = await addPlayer({ ...values, history: [] });
+      router.push(`/players/${created.id}`);
+    } catch (err) {
+      console.error(err);
+      showToast("Nepodařilo se uložit hráče", {
+        description: "Zkontroluj připojení k Supabase a zkus to znovu.",
+        variant: "error",
+      });
+    }
   }
 
   return (
