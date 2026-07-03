@@ -25,12 +25,17 @@ import {
   updateClubRow,
 } from "@/lib/supabase/clubs";
 import {
+  deleteContactRow,
+  fetchContacts,
+  insertContact,
+  updateContactRow,
+} from "@/lib/supabase/contacts";
+import {
   MOCK_ACTIVITY,
   MOCK_AI_CONVERSATIONS,
   MOCK_ALERTS,
   MOCK_AUDIT_LOG,
   MOCK_COMMUNICATIONS,
-  MOCK_CONTACTS,
   MOCK_DEALS,
   MOCK_DOCUMENTS,
   MOCK_GAMES,
@@ -63,6 +68,7 @@ interface DataContextValue {
   clubs: Club[];
   clubsLoading: boolean;
   contacts: Contact[];
+  contactsLoading: boolean;
   tasks: TaskItem[];
   deals: Deal[];
   documents: AgencyDocument[];
@@ -79,7 +85,7 @@ interface DataContextValue {
   deleteClub: (id: string) => void;
   getClub: (id: string) => Club | undefined;
 
-  addContact: (contact: Omit<Contact, "id" | "createdAt" | "updatedAt">) => Contact;
+  addContact: (contact: Omit<Contact, "id" | "createdAt" | "updatedAt">) => Promise<Contact>;
   updateContact: (id: string, updates: Partial<Contact>) => void;
   deleteContact: (id: string) => void;
   getContact: (id: string) => Contact | undefined;
@@ -160,10 +166,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
       .finally(() => setClubsLoading(false));
   }, []);
 
-  const { items: contacts, setItems: setContacts } = useLocalCollection<Contact>(
-    "contacts",
-    MOCK_CONTACTS
-  );
+  // Kontakty už také nejsou v localStorage, ale v Supabase — viz src/lib/supabase/contacts.ts.
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(true);
+
+  useEffect(() => {
+    fetchContacts()
+      .then(setContacts)
+      .catch((err) => console.error("Nepodařilo se načíst kontakty ze Supabase:", err))
+      .finally(() => setContactsLoading(false));
+  }, []);
+
   const { items: tasks, setItems: setTasks } = useLocalCollection<TaskItem>(
     "tasks",
     MOCK_TASKS
@@ -319,13 +332,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   // --- Contacts ------------------------------------------------------------
 
   const addContact = useCallback<DataContextValue["addContact"]>(
-    (contact) => {
-      const created: Contact = {
-        ...contact,
-        id: generateId("contact"),
-        createdAt: nowIso(),
-        updatedAt: nowIso(),
-      };
+    async (contact) => {
+      const created = await insertContact(contact);
       setContacts((prev) => [created, ...prev]);
       logActivity({
         type: "contact_added",
@@ -336,7 +344,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       });
       return created;
     },
-    [setContacts, logActivity]
+    [logActivity]
   );
 
   const updateContact = useCallback<DataContextValue["updateContact"]>(
@@ -346,15 +354,21 @@ export function DataProvider({ children }: { children: ReactNode }) {
           c.id === id ? { ...c, ...updates, updatedAt: nowIso() } : c
         )
       );
+      updateContactRow(id, updates).catch((err) =>
+        console.error("Nepodařilo se uložit změnu kontaktu do Supabase:", err)
+      );
     },
-    [setContacts]
+    []
   );
 
   const deleteContact = useCallback<DataContextValue["deleteContact"]>(
     (id) => {
       setContacts((prev) => prev.filter((c) => c.id !== id));
+      deleteContactRow(id).catch((err) =>
+        console.error("Nepodařilo se smazat kontakt v Supabase:", err)
+      );
     },
-    [setContacts]
+    []
   );
 
   const getContact = useCallback(
@@ -793,6 +807,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
               : c
           )
         );
+        updateContactRow(id, { syncStatus: "synced", dataSource: "eliteprospects", lastSyncedAt: timestamp }).catch(
+          (err) => console.error("Nepodařilo se uložit sync kontaktu do Supabase:", err)
+        );
         setSyncLog((prev) => [
           { id: generateId("sync"), entityType: "contact", entityId: id, entityLabel: `${contact.firstName} ${contact.lastName}`, status: "synced", message: "Contact data refreshed (mock).", timestamp },
           ...prev,
@@ -809,6 +826,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       clubs,
       clubsLoading,
       contacts,
+      contactsLoading,
       tasks,
       deals,
       documents,
@@ -870,6 +888,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       clubs,
       clubsLoading,
       contacts,
+      contactsLoading,
       tasks,
       deals,
       documents,
